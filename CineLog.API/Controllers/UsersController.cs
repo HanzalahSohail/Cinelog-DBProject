@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using CineLog.Data.Models;
 using CineLog.BLL.Services;
+using CineLog.BLL;
+
 
 namespace CineLog.API.Controllers
 {

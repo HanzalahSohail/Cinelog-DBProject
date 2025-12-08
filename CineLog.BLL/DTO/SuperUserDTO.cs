@@ -1,8 +1,8 @@
 namespace CineLog.BLL.DTO
 {
-    public class FriendConnectionDTO
+    public class SuperUserDTO
     {
         public string UserName { get; set; } = string.Empty;
-        public int Level { get; set; } // 1, 2, 3
+        public int TotalReviews { get; set; }
     }
 }

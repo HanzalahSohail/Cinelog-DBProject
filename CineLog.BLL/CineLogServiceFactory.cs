@@ -1,27 +1,27 @@
+using CineLog.BLL.Services;
 using CineLog.Data.Models;
 
-namespace CineLog.BLL.Services
+namespace CineLog.BLL
 {
     public static class CineLogServiceFactory
     {
-        private static string _mode = "EF"; // default mode
+        // This is the mode the SystemController will set: "ef" or "sp"
+        private static string _mode = "ef";
 
         public static void SetMode(string mode)
         {
-            _mode = mode.ToUpper() == "SP" ? "SP" : "EF";
+            _mode = mode?.ToLowerInvariant() == "sp" ? "sp" : "ef";
         }
 
-        public static string GetMode()
-        {
-            return _mode;
-        }
+        public static string GetMode() => _mode;
 
         public static ICineLogService Create(CineLogContext context)
         {
-            if (_mode == "SP")
-                return new SpCineLogService(context);
-
-            return new EfCineLogService(context);
+            return _mode switch
+            {
+                "sp" => new SpCineLogService(context),
+                _ => new EfCineLogService(context),
+            };
         }
     }
 }

@@ -1,5 +1,5 @@
-using CineLog.Data.Models;
 using CineLog.BLL.DTO;
+using CineLog.Data.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace CineLog.BLL.Services
@@ -13,7 +13,7 @@ namespace CineLog.BLL.Services
             _context = context;
         }
 
-        // 1. Top Rated
+        // 1. Top Rated Movies
         public async Task<IEnumerable<Movie>> GetTopRatedMoviesAsync()
         {
             return await _context.Movies
@@ -24,20 +24,19 @@ namespace CineLog.BLL.Services
                 .ToListAsync();
         }
 
-        // 2. Movies by genre
+        // 2. Movies by Genre (LINQ)
         public async Task<IEnumerable<Movie>> GetMoviesByGenreAsync(string genreName)
         {
             return await _context.Movies
                 .Where(m => m.Genres.Any(g => g.GenreName == genreName))
                 .OrderByDescending(m => m.VoteAverage)
                 .ThenByDescending(m => m.VoteCount)
-                .Take(100)
+                .Take(5) // only top 5 for speed
                 .AsNoTracking()
                 .ToListAsync();
         }
 
-
-        // 3. Movie details
+        // 3. Movie Details
         public async Task<MovieDetailsDTO?> GetMovieDetailsAsync(int movieId)
         {
             var movie = await _context.Movies
@@ -53,27 +52,28 @@ namespace CineLog.BLL.Services
             return new MovieDetailsDTO
             {
                 MovieID = movie.MovieId,
-                Title = movie.Title ?? "",
+                Title = movie.Title ?? string.Empty,
                 ReleaseYear = movie.ReleaseYear,
                 VoteAverage = movie.VoteAverage ?? 0,
                 VoteCount = movie.VoteCount ?? 0,
-
-                Genres = movie.Genres.Select(g => g.GenreName ?? "").ToList(),
-
+                Genres = movie.Genres
+                    .Select(g => g.GenreName ?? string.Empty)
+                    .ToList(),
                 RecentReviews = movie.Reviews
                     .OrderByDescending(r => r.ReviewDate)
                     .Take(20)
                     .Select(r => new ReviewDTO
                     {
-                        UserName = r.User?.UserName ?? "",
+                        UserName = r.User?.UserName ?? string.Empty,
                         Rating = r.Rating ?? 0,
-                        ReviewText = r.ReviewText ?? "",
+                        ReviewText = r.ReviewText ?? string.Empty,
                         ReviewDate = r.ReviewDate
-                    }).ToList()
+                    })
+                    .ToList()
             };
         }
 
-        // 4. User activity
+        // 4. User Activity (LINQ)
         public async Task<IEnumerable<UserActivityDTO>> GetUserActivityAsync(int userId)
         {
             var reviews = await _context.Reviews
@@ -82,10 +82,11 @@ namespace CineLog.BLL.Services
                 .Select(r => new UserActivityDTO
                 {
                     ActivityType = "Review",
-                    MovieTitle = r.Movie.Title ?? "",
+                    MovieTitle = r.Movie.Title ?? string.Empty,
                     Rating = r.Rating,
                     ActivityDate = r.ReviewDate
-                }).ToListAsync();
+                })
+                .ToListAsync();
 
             var watchlist = await _context.Watchlists
                 .Include(w => w.Movie)
@@ -93,10 +94,11 @@ namespace CineLog.BLL.Services
                 .Select(w => new UserActivityDTO
                 {
                     ActivityType = "Watchlist",
-                    MovieTitle = w.Movie.Title ?? "",
+                    MovieTitle = w.Movie.Title ?? string.Empty,
                     Rating = null,
                     ActivityDate = w.AddedDate ?? DateTime.MinValue
-                }).ToListAsync();
+                })
+                .ToListAsync();
 
             var listItems = await _context.ListItems
                 .Include(li => li.List)
@@ -105,10 +107,11 @@ namespace CineLog.BLL.Services
                 .Select(li => new UserActivityDTO
                 {
                     ActivityType = "List Item",
-                    MovieTitle = li.Movie.Title ?? "",
+                    MovieTitle = li.Movie.Title ?? string.Empty,
                     Rating = null,
                     ActivityDate = li.AddedDate ?? DateTime.MinValue
-                }).ToListAsync();
+                })
+                .ToListAsync();
 
             return reviews
                 .Concat(watchlist)
@@ -117,10 +120,10 @@ namespace CineLog.BLL.Services
                 .ToList();
         }
 
-        // 5. Trending
+        // 5. Trending Movies (most reviewed in last N days)
         public async Task<IEnumerable<Movie>> GetTrendingMoviesAsync(int days)
         {
-            DateTime since = DateTime.Now.AddDays(-days);
+            var since = DateTime.Now.AddDays(-days);
 
             return await _context.Reviews
                 .Where(r => r.ReviewDate >= since)
@@ -131,7 +134,7 @@ namespace CineLog.BLL.Services
                 .ToListAsync();
         }
 
-        // 6. Recommendations
+        // 6. Recommended Movies by User's Top Genres
         public async Task<IEnumerable<Movie>> RecommendMoviesAsync(int userId)
         {
             var topGenres = await _context.Reviews
@@ -146,20 +149,194 @@ namespace CineLog.BLL.Services
             return await _context.Movies
                 .Where(m => m.Genres.Any(g => topGenres.Contains(g.GenreId)))
                 .OrderByDescending(m => m.VoteAverage)
+                .ThenByDescending(m => m.VoteCount)
                 .AsNoTracking()
                 .ToListAsync();
         }
 
-        // 7. Friend connections
+        // 7. Friend Connections (Level 1 only, EF)
         public async Task<IEnumerable<FriendConnectionDTO>> GetFriendConnectionsAsync(int userId)
         {
             return await _context.Follows
                 .Where(f => f.FollowerId == userId)
+                .Include(f => f.Followed)
                 .Select(f => new FriendConnectionDTO
                 {
-                    UserName = f.Followed.UserName ?? "",
+                    UserName = f.Followed.UserName ?? string.Empty,
                     Level = 1
                 })
+                .ToListAsync();
+        }
+
+        // -------- Extra Operations (Reviews, Watchlist, Lists, Search, Analytics) --------
+
+        public async Task<bool> AddReviewAsync(ReviewCreateDTO dto)
+        {
+            var entity = new Review
+            {
+                UserId = dto.UserId,
+                MovieId = dto.MovieId,
+                Rating = dto.Rating,
+                ReviewText = dto.ReviewText,
+                ReviewDate = DateTime.Now
+            };
+
+            _context.Reviews.Add(entity);
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> AddToWatchlistAsync(int userId, int movieId)
+        {
+            var exists = await _context.Watchlists
+                .AnyAsync(w => w.UserId == userId && w.MovieId == movieId);
+
+            if (exists) return false;
+
+            _context.Watchlists.Add(new Watchlist
+            {
+                UserId = userId,
+                MovieId = movieId,
+                AddedDate = DateTime.Now
+            });
+
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> RemoveFromWatchlistAsync(int userId, int movieId)
+        {
+            var entry = await _context.Watchlists
+                .FirstOrDefaultAsync(w => w.UserId == userId && w.MovieId == movieId);
+
+            if (entry == null) return false;
+
+            _context.Watchlists.Remove(entry);
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<IEnumerable<Movie>> GetWatchlistAsync(int userId)
+        {
+            return await _context.Watchlists
+                .Where(w => w.UserId == userId)
+                .Select(w => w.Movie!)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<List>> GetUserListsAsync(int userId)
+        {
+            return await _context.Lists
+                .Where(l => l.UserId == userId)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<int> CreateListAsync(ListCreateDTO dto)
+        {
+            var list = new List
+            {
+                UserId = dto.UserId,
+                Title = dto.Title,
+                Description = dto.Description,
+                CreatedDate = DateTime.Now
+            };
+
+            _context.Lists.Add(list);
+            await _context.SaveChangesAsync();
+            return list.ListId;
+        }
+
+        public async Task<bool> AddListItemAsync(int listId, int movieId)
+        {
+            var exists = await _context.ListItems
+                .AnyAsync(li => li.ListId == listId && li.MovieId == movieId);
+
+            if (exists) return false;
+
+            _context.ListItems.Add(new ListItem
+            {
+                ListId = listId,
+                MovieId = movieId,
+                AddedDate = DateTime.Now
+            });
+
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> RemoveListItemAsync(int listId, int movieId)
+        {
+            var item = await _context.ListItems
+                .FirstOrDefaultAsync(li => li.ListId == listId && li.MovieId == movieId);
+
+            if (item == null) return false;
+
+            _context.ListItems.Remove(item);
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<IEnumerable<Movie>> GetListItemsAsync(int listId)
+        {
+            return await _context.ListItems
+                .Where(li => li.ListId == listId)
+                .Select(li => li.Movie!)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<Movie>> SearchMoviesAsync(string query)
+        {
+            query = query ?? string.Empty;
+            return await _context.Movies
+                .Where(m => m.Title != null && m.Title.Contains(query))
+                .OrderByDescending(m => m.VoteAverage)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<SuperUserDTO>> GetSuperUsersAsync()
+        {
+            // Use view vw_MostActiveUsers
+            return await _context.VwMostActiveUsers
+                .OrderByDescending(v => v.TotalReviews)
+                .Select(v => new SuperUserDTO
+                {
+                    UserName = v.UserName ?? string.Empty,
+                    TotalReviews = v.TotalReviews ?? 0
+                })
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<PopularGenreDTO>> GetPopularGenresAsync()
+        {
+            return await _context.VwPopularGenres
+                .OrderByDescending(v => v.MovieCount)
+                .Select(v => new PopularGenreDTO
+                {
+                    GenreName = v.GenreName ?? string.Empty,
+                    MovieCount = v.MovieCount ?? 0
+                })
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<ActivityFeedDTO>> GetPublicActivityFeedAsync()
+        {
+            return await _context.VwPublicActivityFeeds
+                .OrderByDescending(v => v.ReviewDate)
+                .Select(v => new ActivityFeedDTO
+                {
+                    UserName = v.UserName ?? string.Empty,
+                    Title = v.Title ?? string.Empty,
+                    Rating = v.Rating ?? 0,
+                    ReviewText = v.ReviewText ?? string.Empty,
+                    ReviewDate = v.ReviewDate
+                })
+                .AsNoTracking()
                 .ToListAsync();
         }
     }
