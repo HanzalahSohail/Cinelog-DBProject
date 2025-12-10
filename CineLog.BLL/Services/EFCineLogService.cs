@@ -150,6 +150,7 @@ namespace CineLog.BLL.Services
                 .Where(m => m.Genres.Any(g => topGenres.Contains(g.GenreId)))
                 .OrderByDescending(m => m.VoteAverage)
                 .ThenByDescending(m => m.VoteCount)
+                .Take(20)
                 .AsNoTracking()
                 .ToListAsync();
         }
@@ -177,8 +178,7 @@ namespace CineLog.BLL.Services
                 UserId = dto.UserId,
                 MovieId = dto.MovieId,
                 Rating = dto.Rating,
-                ReviewText = dto.ReviewText,
-                ReviewDate = DateTime.Now
+                ReviewText = dto.ReviewText
             };
 
             _context.Reviews.Add(entity);

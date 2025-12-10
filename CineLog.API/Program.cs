@@ -1,3 +1,4 @@
+using CineLog.BLL;
 using CineLog.BLL.Services;
 using CineLog.Data.Models;
 using Microsoft.EntityFrameworkCore;
@@ -11,12 +12,16 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Database
+// DB Context
 builder.Services.AddDbContext<CineLogContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// DI
-builder.Services.AddScoped<ICineLogService, EfCineLogService>();
+// IMPORTANT: register factory version (NOT EfCineLogService directly)
+builder.Services.AddScoped<ICineLogService>(provider =>
+{
+    var context = provider.GetRequiredService<CineLogContext>();
+    return CineLogServiceFactory.Create(context);
+});
 
 var app = builder.Build();
 
@@ -24,9 +29,6 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Pipeline
-app.UseHttpsRedirection();
-app.UseAuthorization();
-
 app.MapControllers();
+
 app.Run();

@@ -13,175 +13,312 @@ namespace CineLog.BLL.Services
             _context = context;
         }
 
-        // 1. Top Rated - using view is tricky because it lacks MovieID.
-        // For now we just mimic EF version with direct SQL.
+        // -----------------------------------------------------------
+        // 1. TOP RATED MOVIES (Stored Procedure: proced_GetTopRatedMovies)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<Movie>> GetTopRatedMoviesAsync()
         {
-            return await _context.Movies
-                .FromSqlRaw("SELECT TOP 100 * FROM Movies ORDER BY VoteAverage DESC, VoteCount DESC")
+            var rows = await _context.Movies
+                .FromSqlRaw("EXEC proced_GetTopRatedMovies")
                 .AsNoTracking()
                 .ToListAsync();
+
+            return rows;
         }
 
-        // 2. Movies by Genre - uses Proced_GetMoviesByGenre
+        // -----------------------------------------------------------
+        // 2. MOVIES BY GENRE (SP: Proced_GetMoviesByGenre)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<Movie>> GetMoviesByGenreAsync(string genreName)
         {
-            return await _context.Movies
-                .FromSqlInterpolated($"EXEC Proced_GetMoviesByGenre {genreName}")
-                .AsNoTracking()
+            var rows = await _context.Database
+                .SqlQueryRaw<MovieByGenreRow>(
+                    "EXEC Proced_GetMoviesByGenre @p0",
+                    genreName)
                 .ToListAsync();
+
+            return rows.Select(r => new Movie
+            {
+                MovieId     = r.MovieID,
+                Title       = r.Title,
+                ReleaseYear = r.ReleaseYear,
+                VoteAverage = r.VoteAverage,
+                VoteCount   = r.VoteCount
+            }).ToList();
         }
 
-        // 3. Movie Details (SP returns 3 result sets).
-        // Full mapping from multi-result-set SP via EF is messy.
-        // Keep EF mode for this; SP mode throws for now.
-        public Task<MovieDetailsDTO?> GetMovieDetailsAsync(int movieId)
+        // -----------------------------------------------------------
+        // 3. MOVIE DETAILS (SPs: proced_GetMovieById, proced_GetMovieGenres, proced_GetMovieReviews)
+        // -----------------------------------------------------------
+        public async Task<MovieDetailsDTO?> GetMovieDetailsAsync(int movieId)
         {
-            throw new NotImplementedException("SP version of GetMovieDetailsAsync not implemented. Use EF mode.");
+            // 3.1 Movie
+            var movie = await _context.Movies
+                .FromSqlInterpolated($"EXEC proced_GetMovieById {movieId}")
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (movie == null)
+                return null;
+
+            // 3.2 Genres
+            var genres = await _context.Database
+                .SqlQueryRaw<string>("EXEC proced_GetMovieGenres @p0", movieId)
+                .ToListAsync();
+
+            // 3.3 Reviews (mapped directly into ReviewDTO)
+            var reviews = await _context.Database
+                .SqlQueryRaw<ReviewDTO>("EXEC proced_GetMovieReviews @p0", movieId)
+                .ToListAsync();
+
+            return new MovieDetailsDTO
+            {
+                MovieID       = movie.MovieId,
+                Title         = movie.Title ?? string.Empty,
+                ReleaseYear   = movie.ReleaseYear,
+                VoteAverage   = movie.VoteAverage ?? 0,
+                VoteCount     = movie.VoteCount ?? 0,
+                Genres        = genres.Select(g => g ?? string.Empty).ToList(),
+                RecentReviews = reviews
+            };
         }
 
-        // 4. User Activity - SP version deferred
-        public Task<IEnumerable<UserActivityDTO>> GetUserActivityAsync(int userId)
+        // -----------------------------------------------------------
+        // 4. USER ACTIVITY (SP: proced_GetUserActivity)
+        // -----------------------------------------------------------
+        public async Task<IEnumerable<UserActivityDTO>> GetUserActivityAsync(int userId)
         {
-            throw new NotImplementedException("SP version of GetUserActivityAsync not implemented. Use EF mode.");
+            var rows = await _context.Database
+                .SqlQueryRaw<UserActivityRow>(
+                    "EXEC proced_GetUserActivity @p0",
+                    userId)
+                .ToListAsync();
+
+            return rows
+                .Select(r => new UserActivityDTO
+                {
+                    ActivityType = r.ActivityType ?? string.Empty,
+                    MovieTitle   = r.Title ?? string.Empty,
+                    Rating       = r.Rating,
+                    ActivityDate = r.ActivityDate
+                })
+                .OrderByDescending(a => a.ActivityDate)
+                .ToList();
         }
 
-        // 5. Trending Movies
+        // -----------------------------------------------------------
+        // 5. TRENDING MOVIES (SP: proced_GetTrendingMovies)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<Movie>> GetTrendingMoviesAsync(int days)
         {
-            return await _context.Movies
-                .FromSqlInterpolated($"EXEC proced_GetTrendingMovies {days}")
-                .AsNoTracking()
+            var rows = await _context.Database
+                .SqlQueryRaw<TrendingMovieRow>(
+                    "EXEC proced_GetTrendingMovies @p0",
+                    days)
                 .ToListAsync();
+
+            return rows.Select(r => new Movie
+            {
+                MovieId = r.MovieID,
+                Title   = r.Title
+            }).ToList();
         }
 
-        // 6. Recommend Movies
+        // -----------------------------------------------------------
+        // 6. RECOMMENDED MOVIES (SP: proced_RecommendMovies)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<Movie>> RecommendMoviesAsync(int userId)
         {
-            return await _context.Movies
-                .FromSqlInterpolated($"EXEC proced_RecommendMovies {userId}")
-                .AsNoTracking()
+            var rows = await _context.Database
+                .SqlQueryRaw<MovieByGenreRow>(
+                    "EXEC proced_RecommendMovies @p0",
+                    userId)
                 .ToListAsync();
+
+            return rows.Select(r => new Movie
+            {
+                MovieId     = r.MovieID,
+                Title       = r.Title,
+                ReleaseYear = r.ReleaseYear,
+                VoteAverage = r.VoteAverage,
+                VoteCount   = r.VoteCount
+            }).ToList();
         }
 
-        // 7. Friend Connections
+        // -----------------------------------------------------------
+        // 7. FRIEND CONNECTIONS (SP: proced_FindFriendConnections)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<FriendConnectionDTO>> GetFriendConnectionsAsync(int userId)
         {
-            // No mapped entity for SP result; leave SP mode unimplemented.
-            throw new NotImplementedException("SP version of GetFriendConnectionsAsync not implemented. Use EF mode.");
+            var rows = await _context.Database
+                .SqlQueryRaw<FriendConnectionDTO>(
+                    "EXEC proced_FindFriendConnections @p0",
+                    userId)
+                .ToListAsync();
+
+            return rows;
         }
 
-        // ---------------- REVIEWS ----------------
+        // -----------------------------------------------------------
+        // EXTRA: REVIEWS (SP: proced_AddReview)
+        // -----------------------------------------------------------
         public async Task<bool> AddReviewAsync(ReviewCreateDTO dto)
         {
             await _context.Database.ExecuteSqlInterpolatedAsync(
-                $"EXEC proced_AddReview {dto.UserId}, {dto.MovieId}, {dto.Rating}, {dto.ReviewText}"
-            );
+                $"EXEC proced_AddReview {dto.UserId}, {dto.MovieId}, {dto.Rating}, {dto.ReviewText}");
+
             return true;
         }
 
-        // ---------------- WATCHLIST ----------------
+        // -----------------------------------------------------------
+        // EXTRA: WATCHLIST (SPs: proced_AddToWatchlist, proced_RemoveFromWatchlist, proced_GetWatchlist)
+        // -----------------------------------------------------------
         public async Task<bool> AddToWatchlistAsync(int userId, int movieId)
         {
             await _context.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO Watchlist (UserID, MovieID) VALUES ({userId}, {movieId})"
-            );
+                $"EXEC proced_AddToWatchlist {userId}, {movieId}");
+
             return true;
         }
 
         public async Task<bool> RemoveFromWatchlistAsync(int userId, int movieId)
         {
             await _context.Database.ExecuteSqlInterpolatedAsync(
-                $"DELETE FROM Watchlist WHERE UserID = {userId} AND MovieID = {movieId}"
-            );
+                $"EXEC proced_RemoveFromWatchlist {userId}, {movieId}");
+
             return true;
         }
 
         public async Task<IEnumerable<Movie>> GetWatchlistAsync(int userId)
         {
-            return await _context.Movies
-                .FromSqlInterpolated(
-                    $"SELECT m.* FROM Movies m JOIN Watchlist w ON m.MovieID = w.MovieID WHERE w.UserID = {userId}"
-                )
+            var rows = await _context.Movies
+                .FromSqlInterpolated($"EXEC proced_GetWatchlist {userId}")
                 .AsNoTracking()
                 .ToListAsync();
+
+            return rows;
         }
 
-        // ---------------- LISTS ----------------
+        // -----------------------------------------------------------
+        // EXTRA: LISTS (SPs: proced_GetUserLists, proced_CreateList, proced_AddListItem, proced_RemoveListItem, proced_GetListItems)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<List>> GetUserListsAsync(int userId)
         {
-            return await _context.Lists
-                .FromSqlInterpolated($"SELECT * FROM Lists WHERE UserID = {userId}")
+            var rows = await _context.Lists
+                .FromSqlInterpolated($"EXEC proced_GetUserLists {userId}")
                 .AsNoTracking()
                 .ToListAsync();
+
+            return rows;
         }
 
         public async Task<int> CreateListAsync(ListCreateDTO dto)
         {
-            // Simple insert; retrieve identity with SCOPE_IDENTITY()
-            var sql = @"
-                INSERT INTO Lists (UserID, Title, Description, CreatedDate)
-                VALUES (@p0, @p1, @p2, GETDATE());
-                SELECT CAST(SCOPE_IDENTITY() AS INT);
-            ";
-
-            var result = await _context.Database
-                .SqlQueryRaw<int>(sql, dto.UserId, dto.Title, dto.Description)
+            var ids = await _context.Database
+                .SqlQueryRaw<int>(
+                    "EXEC proced_CreateList @p0, @p1, @p2",
+                    dto.UserId, dto.Title, dto.Description)
                 .ToListAsync();
 
-            return result.FirstOrDefault();
+            return ids.FirstOrDefault();
         }
 
         public async Task<bool> AddListItemAsync(int listId, int movieId)
         {
             await _context.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO ListItem (ListID, MovieID) VALUES ({listId}, {movieId})"
-            );
+                $"EXEC proced_AddListItem {listId}, {movieId}");
+
             return true;
         }
 
         public async Task<bool> RemoveListItemAsync(int listId, int movieId)
         {
             await _context.Database.ExecuteSqlInterpolatedAsync(
-                $"DELETE FROM ListItem WHERE ListID = {listId} AND MovieID = {movieId}"
-            );
+                $"EXEC proced_RemoveListItem {listId}, {movieId}");
+
             return true;
         }
 
         public async Task<IEnumerable<Movie>> GetListItemsAsync(int listId)
         {
-            return await _context.Movies
-                .FromSqlInterpolated(
-                    $"SELECT m.* FROM Movies m JOIN ListItem li ON m.MovieID = li.MovieID WHERE li.ListID = {listId}"
-                )
+            var rows = await _context.Movies
+                .FromSqlInterpolated($"EXEC proced_GetListItems {listId}")
                 .AsNoTracking()
                 .ToListAsync();
+
+            return rows;
         }
 
-        // ---------------- SEARCH ----------------
+        // -----------------------------------------------------------
+        // SEARCH (SP: proced_SearchMovies)
+        // -----------------------------------------------------------
         public async Task<IEnumerable<Movie>> SearchMoviesAsync(string query)
         {
             query ??= string.Empty;
-            return await _context.Movies
-                .FromSqlInterpolated($"SELECT * FROM Movies WHERE Title LIKE '%' + {query} + '%'")
+
+            var rows = await _context.Movies
+                .FromSqlInterpolated($"EXEC proced_SearchMovies {query}")
                 .AsNoTracking()
                 .ToListAsync();
+
+            return rows;
         }
 
-        // ---------------- ANALYTICS ----------------
-        public Task<IEnumerable<SuperUserDTO>> GetSuperUsersAsync()
+        // -----------------------------------------------------------
+        // ANALYTICS (SPs: proced_GetSuperUsers, proced_GetPopularGenres, proced_GetPublicActivityFeed)
+        // -----------------------------------------------------------
+        public async Task<IEnumerable<SuperUserDTO>> GetSuperUsersAsync()
         {
-            throw new NotImplementedException("SP version of GetSuperUsersAsync not implemented. Use EF mode.");
+            var rows = await _context.Database
+                .SqlQueryRaw<SuperUserDTO>("EXEC proced_GetSuperUsers")
+                .ToListAsync();
+
+            return rows;
         }
 
-        public Task<IEnumerable<PopularGenreDTO>> GetPopularGenresAsync()
+        public async Task<IEnumerable<PopularGenreDTO>> GetPopularGenresAsync()
         {
-            throw new NotImplementedException("SP version of GetPopularGenresAsync not implemented. Use EF mode.");
+            var rows = await _context.Database
+                .SqlQueryRaw<PopularGenreDTO>("EXEC proced_GetPopularGenres")
+                .ToListAsync();
+
+            return rows;
         }
 
-        public Task<IEnumerable<ActivityFeedDTO>> GetPublicActivityFeedAsync()
+        public async Task<IEnumerable<ActivityFeedDTO>> GetPublicActivityFeedAsync()
         {
-            throw new NotImplementedException("SP version of GetPublicActivityFeedAsync not implemented. Use EF mode.");
+            var rows = await _context.Database
+                .SqlQueryRaw<ActivityFeedDTO>("EXEC proced_GetPublicActivityFeed")
+                .ToListAsync();
+
+            return rows;
+        }
+
+        // -----------------------------------------------------------
+        // Helper row types for SP mapping
+        // -----------------------------------------------------------
+        private sealed class MovieByGenreRow
+        {
+            public int MovieID { get; set; }
+            public string? Title { get; set; }
+            public int? ReleaseYear { get; set; }
+            public decimal? VoteAverage { get; set; }
+            public int? VoteCount { get; set; }
+        }
+
+        private sealed class TrendingMovieRow
+        {
+            public int MovieID { get; set; }
+            public string? Title { get; set; }
+            public int RecentReviews { get; set; }
+        }
+
+        private sealed class UserActivityRow
+        {
+            public string? ActivityType { get; set; }
+            public string? Title { get; set; }
+            public decimal? Rating { get; set; }
+            public DateTime ActivityDate { get; set; }
         }
     }
 }
